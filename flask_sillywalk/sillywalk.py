@@ -34,6 +34,7 @@ class SwaggerApiRegistry(object):
         self.basepath = urlparse(self.baseurl).path
         self.r = defaultdict(dict)
         self.models = defaultdict(dict)
+        self.authorizations = defaultdict(dict)
         self.registered_routes = []
         if app is not None:
             self.app = app
@@ -66,22 +67,30 @@ class SwaggerApiRegistry(object):
 
     def resources(self):
         """
-        Gets all currently known API resources and serialized them.
+        Gets all currently known API resources and serializes them.
         """
         resources = {
             "apiVersion": self.api_version,
             "swaggerVersion": __SWAGGERVERSION__,
             "basePath": self.baseurl,
             "models": dict(),
-            "apis": list()}
+            "apis": list(),
+            "authorizations": dict(),
+        }
+
         for resource in self.r.keys():
             description = (self.api_descriptions[resource]
                            if resource in self.api_descriptions else "")
             resources["apis"].append({
                 "path": "/" + resource + ".{format}",
                 "description": description})
+
         for k, v in self.models.items():
             resources["models"][k] = v
+
+        for k, v in self.authorizations.items():
+            resources["authorizations"][k] = v.document()
+
         return resources
 
     def registerModel(self,
@@ -124,6 +133,9 @@ class SwaggerApiRegistry(object):
 
         return inner_func
 
+    def registerApiKeyAuthorization(self, auth):
+        self.authorizations[auth.name] = auth
+
     def _register(self,
                   path,
                   f,
@@ -133,6 +145,7 @@ class SwaggerApiRegistry(object):
                   responseMessages,
                   nickname,
                   notes,
+                  auth,
                   bp):
 
         if self.app is None:
@@ -164,7 +177,8 @@ class SwaggerApiRegistry(object):
             params=parameters,
             responseMessages=responseMessages,
             nickname=nickname,
-            notes=notes)
+            notes=notes,
+            auth=auth)
 
         if api.resource not in self.app.view_functions:
             for fmt in SUPPORTED_FORMATS:
@@ -190,6 +204,7 @@ class SwaggerApiRegistry(object):
                      responseMessages=[],
                      nickname=None,
                      notes=None,
+                     auth=None,
                      bp=None):
         """
         Registers an API endpoint.
@@ -215,7 +230,7 @@ class SwaggerApiRegistry(object):
 
         """
         self._register(path, f, method, content_type, parameters,
-                       responseMessages, nickname, notes, bp)
+                       responseMessages, nickname, notes, auth, bp)
 
     def register(self,
                  path,
@@ -225,6 +240,7 @@ class SwaggerApiRegistry(object):
                  responseMessages=[],
                  nickname=None,
                  notes=None,
+                 auth=None,
                  bp=None):
         """
         Registers an API endpoint.
@@ -250,7 +266,7 @@ class SwaggerApiRegistry(object):
         """
         def inner_func(f):
             self._register(path, f, method, content_type, parameters,
-                           responseMessages, nickname, notes, bp)
+                           responseMessages, nickname, notes, auth, bp)
         return inner_func
 
     def show_resource(self, resource):
@@ -303,7 +319,8 @@ class Api(SwaggerDocumentable):
             params=None,
             responseMessages=None,
             nickname=None,
-            notes=None):
+            notes=None,
+            auth=None):
         self.httpMethod = httpMethod
         self.summary = method.__doc__ if method.__doc__ is not None else ""
         self.resource = path.lstrip("/").split("/")[0]
@@ -312,6 +329,7 @@ class Api(SwaggerDocumentable):
         self.responseMessages = [] if responseMessages is None else responseMessages
         self.nickname = "" if nickname is None else nickname
         self.notes = notes
+        self.authorizations = [] if auth is None else auth
 
     # See https://github.com/wordnik/swagger-core/wiki/API-Declaration
     def document(self):
@@ -319,6 +337,9 @@ class Api(SwaggerDocumentable):
         # need to serialize these guys
         ret["parameters"] = [p.document() for p in self.parameters]
         ret["responseMessages"] = [e.document() for e in self.responseMessages]
+        ret["authorizations"] = dict()
+        for e in self.authorizations:
+            ret["authorizations"][e.name] = []
         return ret
 
     def __hash__(self):
@@ -360,6 +381,37 @@ class ImplicitApiParameter(ApiParameter):
                 "You need to provide an implicit param with a default value.")
         super(ImplicitApiParameter, self).__init__(*args, **kwargs)
         self.defaultValue = kwargs.get("default_value")
+
+
+class ApiKeyAuthorization(SwaggerDocumentable):
+    """
+    An API Key authorization object.
+    """
+
+    def __init__(
+            self,
+            name,
+            passAs="header",
+            keyname=None):
+        self.type = "apiKey"
+        self.name = name
+        self.passAs = passAs
+        self.keyname = name if keyname is None else keyname
+
+    def document(self):
+        d = self.__dict__.copy()
+        del d["name"]
+        return d
+
+
+class ApiResponse(SwaggerDocumentable):
+    """
+    An API response.
+    """
+    def __init__(self, code, message, model=None):
+        self.message = message
+        self.code = code
+        self.responseModel = model
 
 
 class ApiErrorResponse(SwaggerDocumentable):

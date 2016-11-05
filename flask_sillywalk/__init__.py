@@ -1,2 +1,2 @@
 from .sillywalk import (SwaggerApiRegistry, SwaggerRegistryError, ApiParameter,
-                        ApiErrorResponse)
+                        ApiKeyAuthorization, ApiResponse, ApiErrorResponse)
