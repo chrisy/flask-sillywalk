@@ -85,9 +85,6 @@ class SwaggerApiRegistry(object):
                 "path": "/" + resource + ".{format}",
                 "description": description})
 
-        for k, v in self.models.items():
-            resources["models"][k] = v
-
         for k, v in self.authorizations.items():
             resources["authorizations"][k] = v.document()
 
@@ -281,7 +278,7 @@ class SwaggerApiRegistry(object):
                 "swaggerVersion": __SWAGGERVERSION__,
                 "basePath": self.baseurl,
                 "apis": list(),
-                "models": list()
+                "models": dict()
             }
             resource_map = self.r.get(resource)
             for path, apis in resource_map.items():
@@ -291,6 +288,11 @@ class SwaggerApiRegistry(object):
                     "operations": list()}
                 for api in apis:
                     api_object["operations"].append(api.document())
+                    for m in api.responseMessages:
+                        mname = getattr(m, "responseModel", None)
+                        if mname is not None and mname not in return_value["models"]:
+                            if mname in self.models:
+                                return_value["models"][mname] = self.models[mname]
                 return_value["apis"].append(api_object)
             return return_value
 
@@ -299,7 +301,8 @@ class SwaggerApiRegistry(object):
 
 class SwaggerDocumentable(object):
     """
-    A documentable swagger object, e.g. an API endpoint, an API parameter, an API error response...
+    A documentable swagger object, e.g. an API endpoint,
+    an API parameter, an API error response...
     """
 
     def document(self):
