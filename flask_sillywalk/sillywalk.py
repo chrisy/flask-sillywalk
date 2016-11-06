@@ -90,42 +90,13 @@ class SwaggerApiRegistry(object):
 
         return resources
 
-    def registerModel(self,
-                      type_="object"):
+    def registerModel(self):
         """
         Registers a Swagger Model (object).
-
-        Usage:
-
-        >>> @my_registry.registerModel(type="Animal")
-        >>> class Dog(object):
-        >>>     def __init__(self):
-        >>>     pass
         """
 
         def inner_func(c, *args, **kwargs):
-            if self.app is None:
-                raise SwaggerRegistryError(
-                    "You need to initialize {0} with a Flask app".format(
-                        self.__class__.__name__))
-            self.models[c.__name__] = {
-                "id": c.__name__,
-                "description": c.__doc__ if c.__doc__ is not None else "",
-                "type": type_,
-                "properties": dict()}
-            argspec = inspect.getargspec(c.__init__)
-            argspec.args.remove("self")
-            defaults = {}
-            if argspec.defaults:
-                defaults = list(zip(argspec.args[-len(
-                    argspec.defaults):], argspec.defaults))
-            for arg in argspec.args[:-len(defaults)]:
-                if self.models[c.__name__].get("required") is None:
-                    self.models[c.__name__]["required"] = []
-                self.models[c.__name__]["required"].append(arg)
-                # self.models[c.__name__]["required"][arg] = {"required": True}
-            for k, v in defaults:
-                self.models[c.__name__]["properties"][k] = {"default": v}
+            self.models[c.__name__] = c
             return c
 
         return inner_func
@@ -280,6 +251,7 @@ class SwaggerApiRegistry(object):
                 "apis": list(),
                 "models": dict()
             }
+            models = set()
             resource_map = self.r.get(resource)
             for path, apis in resource_map.items():
                 api_object = {
@@ -290,13 +262,145 @@ class SwaggerApiRegistry(object):
                     api_object["operations"].append(api.document())
                     for m in api.responseMessages:
                         mname = getattr(m, "responseModel", None)
-                        if mname is not None and mname not in return_value["models"]:
-                            if mname in self.models:
-                                return_value["models"][mname] = self.models[mname]
+                        if mname is None or mname not in self.models \
+                                or mname in models:
+                            continue
+
+                        models.add(mname)
+                        model = self.models[mname]
+                        models = models | model.dependencies()
+
                 return_value["apis"].append(api_object)
+
+            for mname in models:
+                if mname in return_value["models"]:
+                    continue
+                if mname not in self.models:
+                    continue
+
+                model = self.models[mname]
+                return_value["models"][mname] = model.document()
+
             return return_value
 
         return inner_func
+
+# A schema property. Typically subclasses of this type will be used
+# in a subclass of ApimodelParent.
+#
+# NB: No docitem here since it could accidentally end up in the
+# generated schema.
+class ApiModelItem(object):
+    type = None
+    format = None
+    ref = None
+    default = None
+    enum = None
+    items = None
+    unique = False
+    minimum = None
+    maximum = None
+
+    required = True
+
+    @classmethod
+    def document(cls):
+        r = {
+            "description": "" if cls.__doc__ is None else cls.__doc__,
+        }
+
+        if cls.type is not None:
+            r['type'] = str(cls.type)
+            if cls.format is not None:
+                r["format"] = str(cls.format)
+        elif cls.ref is not None:
+            if inspect.isclass(cls.ref):
+                r["$ref"] = cls.ref.__name__
+            else:
+                r["$ref"] = str(cls.ref)
+
+        if cls.default is not None:
+            r["defaultValue"] = cls.default
+
+        if cls.enum is not None:
+            r["enum"] = list(cls.enum)
+
+        if cls.minimum is not None:
+            r["minimum"] = str(cls.minimum)
+
+        if cls.maximum is not None:
+            r["maximum"] = str(cls.maximum)
+
+        if cls.items is not None:
+            r["items"] = {}
+            if inspect.isclass(cls.items):
+                r["items"]["type"] = cls.items.__name__
+            else:
+                r["items"]["type"] = str(cls.items)
+
+        if cls.type == "list" and cls.unique:
+            r["uniqueItems"] = True
+
+        return r
+
+    @classmethod
+    def dependencies(cls):
+        models = set()
+
+        if cls.items is not None:
+            if not isinstance(cls.items, str):
+                models.add(cls.items.__name__)
+                models = models | cls.items.dependencies()
+            elif cls.items not in ("integer", "long", "float", "double", \
+                "string", "byte", "boolean", "date", "dateTime"):
+                models.add(cls.items)
+
+        if cls.ref is not None:
+            models.add(cls.ref)
+
+        return models
+
+
+# Defines a Model schema. Typically a subclass of this would have a
+# collection of subclasses of ApiModelItem, each of which represents a
+# single property in the schema.
+#
+# NB: No docitem here since it could accidentally end up in the
+# generated schema.
+class ApiModelParent(object):
+    @classmethod
+    def document(cls):
+        r = {
+            "id": cls.__name__,
+            "description": "" if cls.__doc__ is None else cls.__doc__ ,
+            "properties": {},
+            "required": [],
+        }
+
+        items = [getattr(cls, a) for a in cls.__dict__]
+        items = [a for a in items if inspect.isclass(a)]
+        items = [a for a in items if issubclass(a, ApiModelItem)]
+
+        for item in items:
+            name = item.__name__
+            r["properties"][name] = item.document()
+            if item.required:
+                r["required"].append(name)
+
+        return r
+
+    @classmethod
+    def dependencies(cls):
+        models = set()
+
+        items = [getattr(cls, a) for a in cls.__dict__]
+        items = [a for a in items if inspect.isclass(a)]
+        items = [a for a in items if issubclass(a, ApiModelItem)]
+
+        for item in items:
+            models = models | item.dependencies()
+
+        return models
 
 
 class SwaggerDocumentable(object):
